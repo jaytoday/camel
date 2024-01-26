@@ -1,12 +1,26 @@
+# =========== Copyright 2023 @ CAMEL-AI.org. All Rights Reserved. ===========
+# Licensed under the Apache License, Version 2.0 (the “License”);
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an “AS IS” BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# =========== Copyright 2023 @ CAMEL-AI.org. All Rights Reserved. ===========
 import json
 import multiprocessing
 import os
+from typing import Any, Dict
 
 from colorama import Fore
 
-from camel.agents import RolePlaying
 from camel.configs import ChatGPTConfig
-from camel.typing import TaskType
+from camel.societies import RolePlaying
+from camel.types import TaskType
 
 
 def generate_data(assistant_idx: int, assistant_role_name: str, user_idx: int,
@@ -20,7 +34,7 @@ def generate_data(assistant_idx: int, assistant_role_name: str, user_idx: int,
     role_play_session = RolePlaying(
         assistant_role_name,
         user_role_name,
-        original_task_prompt,
+        task_prompt=original_task_prompt,
         with_task_specify=True,
         with_task_planner=False,
         task_type=TaskType.MISALIGNMENT,
@@ -28,7 +42,7 @@ def generate_data(assistant_idx: int, assistant_role_name: str, user_idx: int,
             temperature=1.4)),
     )
 
-    assistant_msg, _ = role_play_session.init_chat()
+    input_msg = role_play_session.init_chat()
 
     if verbose:
         print(Fore.GREEN + "AI Assistant sys message:\n"
@@ -43,7 +57,7 @@ def generate_data(assistant_idx: int, assistant_role_name: str, user_idx: int,
               f"Final task prompt:\n{role_play_session.task_prompt}\n")
 
     message_counter = 0
-    message_dict = {}
+    message_dict: Dict[str, Any] = {}
 
     assistant_agent = role_play_session.assistant_agent
     user_agent = role_play_session.user_agent
@@ -78,30 +92,28 @@ def generate_data(assistant_idx: int, assistant_role_name: str, user_idx: int,
 
     while message_counter < max_num_messages:
 
-        assistant_return, user_return = role_play_session.step(assistant_msg)
-        assistant_msg, assistant_terminated, assistant_info = assistant_return
-        user_msg, user_terminated, user_info = user_return
+        assistant_response, user_response = role_play_session.step(input_msg)
 
         # Condition 1: User terminates the chat
-        if user_terminated:
+        if user_response.terminated:
             message_dict["termination_reason"] = (
                 f"{str(user_agent.role_type)}: "
-                f"{user_info['finish_reasons'][0]}")
+                f"{user_response.info['termination_reasons'][0]}")
             break
 
         # Condition 2: Assistant terminates the chat
-        if assistant_terminated:
+        if assistant_response.terminated:
             message_dict["termination_reason"] = (
                 f"{str(assistant_agent.role_type)}: "
-                f"{assistant_info['finish_reasons'][0]}")
+                f"{assistant_response.info['termination_reasons'][0]}")
             break
 
         if verbose:
-            print(f"User:\n{user_msg.content}\n")
-            print(f"Assistant:\n{assistant_msg.content}\n")
+            print(f"User:\n{user_response.msg.content}\n")
+            print(f"Assistant:\n{assistant_response.msg.content}\n")
 
         # Condition 3: Break if user does not give instruction
-        if user_no_instruct_word not in user_msg.content:
+        if user_no_instruct_word not in user_response.msg.content:
             user_no_instruct_counter += 1
             if user_no_instruct_counter == user_no_instruct_threshold:
                 message_dict[
@@ -111,7 +123,7 @@ def generate_data(assistant_idx: int, assistant_role_name: str, user_idx: int,
             user_no_instruct_counter = 0
 
         # Condition 4: Break if assistant gives instruction (flipped role)
-        if assistant_instruct_word in assistant_msg.content:
+        if assistant_instruct_word in assistant_response.msg.content:
             assistant_instruct_counter += 1
             if assistant_instruct_counter == assistant_instruct_threshold:
                 message_dict[
@@ -122,8 +134,8 @@ def generate_data(assistant_idx: int, assistant_role_name: str, user_idx: int,
 
         # Condition 5: Repeat word observed
         for repeat_word in repeat_word_list:
-            if repeat_word in user_msg.content.lower(
-            ) or repeat_word in assistant_msg.content.lower():
+            if repeat_word in user_response.msg.content.lower(
+            ) or repeat_word in assistant_response.msg.content.lower():
                 repeat_word_counter += 1
                 if repeat_word_counter == repeat_word_threshold:
                     message_dict[
@@ -134,16 +146,20 @@ def generate_data(assistant_idx: int, assistant_role_name: str, user_idx: int,
 
         # Save user message
         message_counter += 1
-        message_dict[f"message_{message_counter}"] = user_msg.to_dict()
+        message_dict[f"message_{message_counter}"] = user_response.msg.to_dict(
+        )
 
         # Condition 5: End token observed
-        if "<CAMEL_TASK_DONE>" in user_msg.content:
+        if "<CAMEL_TASK_DONE>" in user_response.msg.content:
             message_dict['termination_reason'] = "<CAMEL_TASK_DONE>"
             break
 
         # Save assistant message
         message_counter += 1
-        message_dict[f"message_{message_counter}"] = assistant_msg.to_dict()
+        message_dict[
+            f"message_{message_counter}"] = assistant_response.msg.to_dict()
+
+        input_msg = assistant_response.msg
 
     message_dict["num_messages"] = message_counter
 

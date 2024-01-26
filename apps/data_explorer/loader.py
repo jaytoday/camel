@@ -1,15 +1,28 @@
+# =========== Copyright 2023 @ CAMEL-AI.org. All Rights Reserved. ===========
+# Licensed under the Apache License, Version 2.0 (the “License”);
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an “AS IS” BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# =========== Copyright 2023 @ CAMEL-AI.org. All Rights Reserved. ===========
 """
 Everything related to parsing the data JSONs into UI-compatible format.
 """
 
 import glob
-import json
 import os
 import re
-import zipfile
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, Optional, Tuple, Union
 
 from tqdm import tqdm
+
+from apps.common.auto_zip import AutoZip
 
 ChatHistory = Dict[str, Any]
 ParsedChatHistory = Dict[str, Any]
@@ -18,30 +31,6 @@ Datasets = Dict[str, AllChats]
 
 REPO_ROOT = os.path.realpath(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "../.."))
-
-
-class AutoZip:
-    def __init__(self, zip_path: str, ext: str = ".json"):
-        self.zip_path = zip_path
-        self.zip = zipfile.ZipFile(zip_path, "r")
-        self.fl = [f for f in self.zip.filelist if f.filename.endswith(ext)]
-
-    def __next__(self):
-        if self.index >= len(self.fl):
-            raise StopIteration
-        else:
-            finfo = self.fl[self.index]
-            with self.zip.open(finfo) as f:
-                raw_json = json.loads(f.read().decode("utf-8"))
-            self.index += 1
-            return raw_json
-
-    def __len__(self):
-        return len(self.fl)
-
-    def __iter__(self):
-        self.index = 0
-        return self
 
 
 def parse(raw_chat: ChatHistory) -> Union[ParsedChatHistory, None]:
@@ -122,17 +111,17 @@ def load_zip(zip_path: str) -> AllChats:
             continue
         parsed_list.append(parsed)
 
-    assistant_roles = set()
-    user_roles = set()
+    assistant_roles_set = set()
+    user_roles_set = set()
     for parsed in parsed_list:
-        assistant_roles.add(parsed['assistant_role'])
-        user_roles.add(parsed['user_role'])
-    assistant_roles = list(sorted(assistant_roles))
-    user_roles = list(sorted(user_roles))
-    matrix: Dict[Tuple[str, str], List[Dict]] = dict()
+        assistant_roles_set.add(parsed['assistant_role'])
+        user_roles_set.add(parsed['user_role'])
+    assistant_roles = list(sorted(assistant_roles_set))
+    user_roles = list(sorted(user_roles_set))
+    matrix: Dict[Tuple[str, str], Dict[str, Dict]] = dict()
     for parsed in parsed_list:
         key = (parsed['assistant_role'], parsed['user_role'])
-        original_task = parsed['original_task']
+        original_task: str = parsed['original_task']
         new_item = {
             k: v
             for k, v in parsed.items()

@@ -1,34 +1,43 @@
+# =========== Copyright 2023 @ CAMEL-AI.org. All Rights Reserved. ===========
+# Licensed under the Apache License, Version 2.0 (the “License”);
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an “AS IS” BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# =========== Copyright 2023 @ CAMEL-AI.org. All Rights Reserved. ===========
 from camel.generators import (
     AISocietyTaskPromptGenerator,
     RoleNameGenerator,
     SystemMessageGenerator,
 )
-from camel.typing import RoleType, TaskType
+from camel.types import RoleType, TaskType
 
 
 def test_system_message_generator():
     sys_msg_generator = SystemMessageGenerator(task_type=TaskType.AI_SOCIETY)
-    sys_msg_generator.from_dict({"<ASSISTANT_ROLE>": "doctor"},
+    sys_msg_generator.from_dict(dict(assistant_role="doctor"),
                                 role_tuple=("doctor", RoleType.ASSISTANT))
-    sys_msg_generator.from_dict({"<USER_ROLE>": "doctor"},
+    sys_msg_generator.from_dict(dict(user_role="doctor"),
                                 role_tuple=("doctor", RoleType.USER))
 
     sys_msg_generator.from_dicts(
-        [{
-            "<ASSISTANT_ROLE>": "chatbot",
-            "<USER_ROLE>": "doctor"
-        }] * 2,
+        [dict(assistant_role="doctor", user_role="doctor")] * 2,
         role_tuples=[("chatbot", RoleType.ASSISTANT),
                      ("doctor", RoleType.USER)],
     )
 
     sys_msg_generator = SystemMessageGenerator(task_type=TaskType.AI_SOCIETY)
     sys_msg_generator.from_dicts(
-        [{
-            "<ASSISTANT_ROLE>": "chatbot",
-            "<USER_ROLE>": "doctor",
-            "<TASK>": "Analyze a patient's medical report"
-        }] * 2,
+        [
+            dict(assistant_role="chatbot", user_role="doctor",
+                 task="Analyze a patient's medical report")
+        ] * 2,
         role_tuples=[("chatbot", RoleType.ASSISTANT),
                      ("doctor", RoleType.USER)],
     )

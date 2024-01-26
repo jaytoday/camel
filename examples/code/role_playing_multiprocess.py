@@ -1,41 +1,50 @@
+# =========== Copyright 2023 @ CAMEL-AI.org. All Rights Reserved. ===========
+# Licensed under the Apache License, Version 2.0 (the “License”);
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an “AS IS” BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# =========== Copyright 2023 @ CAMEL-AI.org. All Rights Reserved. ===========
 import json
 import multiprocessing
 import os
+from typing import Any, Dict
 
 from camel.agents import ChatAgent, TaskSpecifyAgent
 from camel.configs import ChatGPTConfig
 from camel.generators import SystemMessageGenerator
-from camel.messages import (
-    AssistantChatMessage,
-    AssistantSystemMessage,
-    UserChatMessage,
-    UserSystemMessage,
-)
-from camel.typing import RoleType, TaskType
+from camel.messages import BaseMessage
+from camel.types import RoleType, TaskType
+from camel.utils import download_tasks
 
 
 def init_chat(
     assistant_agent: ChatAgent,
     user_agent: ChatAgent,
-    user_sys_msg: UserSystemMessage,
-    assistant_sys_msg: AssistantSystemMessage,
+    user_sys_msg: BaseMessage,
+    assistant_sys_msg: BaseMessage,
 ):
     assistant_agent.reset()
     user_agent.reset()
 
     # Send the system messages again to the agents using chat messages
-    assistant_msg = AssistantChatMessage(
+    assistant_msg = BaseMessage.make_assistant_message(
         role_name=assistant_agent.role_name,
         content=(f"{user_sys_msg.content}. "
                  "Now start to give me instructions one by one. "
                  "Only reply with Instruction and Input."))
-    assistant_msg.role = "user"
 
-    user_msg = UserChatMessage(role_name=user_agent.role_name,
-                               content=f"{assistant_sys_msg.content}")
-    msgs, _, _ = assistant_agent.step(user_msg)
+    user_msg = BaseMessage.make_user_message(
+        role_name=user_agent.role_name, content=f"{assistant_sys_msg.content}")
+    assistant_agent.step(user_msg)
 
-    return assistant_msg, msgs
+    return assistant_msg
 
 
 def generate_data(language_idx: int, language_name: str, domain_idx: int,
@@ -50,21 +59,19 @@ def generate_data(language_idx: int, language_name: str, domain_idx: int,
         task_type=TaskType.CODE,
         model_config=ChatGPTConfig(temperature=1.4),
     )
-    specified_task_prompt = task_specify_agent.specify_task(
-        original_task_prompt, [
-            ("<DOMAIN>", domain_name),
-            ("<LANGUAGE>", language_name),
-        ])
+    specified_task_prompt = task_specify_agent.run(
+        original_task_prompt,
+        meta_dict=dict(domain=domain_name, language=language_name),
+    )
 
     print(f"Original Task: {original_task_prompt}")
     print(f"Specified Task: {specified_task_prompt}")
 
     sys_msg_generator = SystemMessageGenerator(task_type=TaskType.CODE)
-    sys_msg_meta_dicts = [{
-        "<LANGUAGE>": language_name,
-        "<DOMAIN>": domain_name,
-        "<TASK>": specified_task_prompt
-    }] * 2
+    sys_msg_meta_dicts = [
+        dict(language=language_name, domain=domain_name,
+             task=specified_task_prompt)
+    ] * 2
     assistant_sys_msg, user_sys_msg = sys_msg_generator.from_dicts(
         sys_msg_meta_dicts,
         role_tuples=[
@@ -77,13 +84,13 @@ def generate_data(language_idx: int, language_name: str, domain_idx: int,
                                 message_window_size=max_num_messages)
     user_agent = ChatAgent(user_sys_msg, message_window_size=max_num_messages)
 
-    assistant_msg, _ = init_chat(assistant_agent, user_agent, user_sys_msg,
-                                 assistant_sys_msg)
+    input_assistant_msg = init_chat(assistant_agent, user_agent, user_sys_msg,
+                                    assistant_sys_msg)
 
     print("Assistant System Message: ", assistant_sys_msg.content)
     print("User System Message: ", user_sys_msg.content)
     message_counter = 0
-    message_dict = {}
+    message_dict: Dict[str, Any] = {}
 
     # Append roles to the dictionary
     # We start number from 1 not 0.
@@ -114,35 +121,32 @@ def generate_data(language_idx: int, language_name: str, domain_idx: int,
 
     while message_counter < max_num_messages:
 
-        user_msgs, user_terminated, user_info = user_agent.step(assistant_msg)
+        user_response = user_agent.step(input_assistant_msg)
 
         # Condition 1: User terminates the chat
-        if user_terminated:
+        if user_response.terminated:
             message_dict["termination_reason"] = (
                 f"{str(user_agent.role_type)}: "
-                f"{user_info['finish_reasons'][0]}")
+                f"{user_response.info['termination_reasons'][0]}")
             break
 
-        user_msg = user_msgs[0]
-        print(f"User:\n{user_msg.content}\n")
-        user_msg.role = "user"
+        user_agent.record_message(user_response.msg)
+        print(f"User:\n{user_response.msg.content}\n")
 
-        assistant_msgs, assistant_terminated, assistant_info = (
-            assistant_agent.step(user_msg))
+        assistant_response = assistant_agent.step(user_response.msg)
 
         # Condition 2: Assistant terminates the chat
-        if assistant_terminated:
+        if assistant_response.terminated:
             message_dict["termination_reason"] = (
                 f"{str(assistant_agent.role_type)}: "
-                f"{assistant_info['finish_reasons'][0]}")
+                f"{assistant_response.info['termination_reasons'][0]}")
             break
 
-        assistant_msg = assistant_msgs[0]
-        print(f"Assistant:\n{assistant_msg.content}\n")
-        assistant_msg.role = "user"
+        assistant_agent.record_message(assistant_response.msg)
+        print(f"Assistant:\n{assistant_response.msg.content}\n")
 
         # Condition 3: Break if user does not give instruction
-        if user_no_instruct_word not in user_msg.content:
+        if user_no_instruct_word not in user_response.msg.content:
             user_no_instruct_counter += 1
             if user_no_instruct_counter == user_no_instruct_threshold:
                 message_dict[
@@ -152,7 +156,7 @@ def generate_data(language_idx: int, language_name: str, domain_idx: int,
             user_no_instruct_counter = 0
 
         # Condition 4: Break if assistant gives instruction (flipped role)
-        if assistant_instruct_word in assistant_msg.content:
+        if assistant_instruct_word in assistant_response.msg.content:
             assistant_instruct_counter += 1
             if assistant_instruct_counter == assistant_instruct_threshold:
                 message_dict[
@@ -163,8 +167,8 @@ def generate_data(language_idx: int, language_name: str, domain_idx: int,
 
         # Condition 5: Repeat word observed
         for repeat_word in repeat_word_list:
-            if repeat_word in user_msg.content.lower(
-            ) or repeat_word in assistant_msg.content.lower():
+            if repeat_word in user_response.msg.content.lower(
+            ) or repeat_word in assistant_response.msg.content.lower():
                 repeat_word_counter += 1
                 if repeat_word_counter == repeat_word_threshold:
                     message_dict[
@@ -175,16 +179,20 @@ def generate_data(language_idx: int, language_name: str, domain_idx: int,
 
         # Save user message
         message_counter += 1
-        message_dict[f"message_{message_counter}"] = user_msg.to_dict()
+        message_dict[f"message_{message_counter}"] = user_response.msg.to_dict(
+        )
 
         # Condition 5: End token observed
-        if "<CAMEL_TASK_DONE>" in user_msg.content:
+        if "<CAMEL_TASK_DONE>" in user_response.msg.content:
             message_dict['termination_reason'] = "<CAMEL_TASK_DONE>"
             break
 
         # Save assistant message
         message_counter += 1
-        message_dict[f"message_{message_counter}"] = assistant_msg.to_dict()
+        message_dict[
+            f"message_{message_counter}"] = assistant_response.msg.to_dict()
+
+        input_assistant_msg = assistant_response.msg
 
     message_dict["num_messages"] = message_counter
 
@@ -198,8 +206,27 @@ def generate_data(language_idx: int, language_name: str, domain_idx: int,
 
 def main() -> None:
 
+    # Define the folder path
+    folder_path = "./code_data/"
+
+    # Check if the folder already exists
+    if not os.path.exists(folder_path):
+        os.makedirs(folder_path)
+
+    # Check if the folder is empty
+    if not os.listdir(folder_path):
+        download_tasks(task=TaskType.CODE, folder_path=folder_path)
+
     # Chunk for parallel jobs
-    array_idx = int(os.environ.get('SLURM_ARRAY_TASK_ID'))
+    try:
+        slurm_array_task_id = os.environ.get('SLURM_ARRAY_TASK_ID')
+        if not isinstance(slurm_array_task_id, str):
+            raise TypeError()
+        array_idx = int(slurm_array_task_id)
+    except (TypeError, ValueError) as e:
+        print(f"Error: {e}")
+        array_idx = 0
+
     languages_per_chunk = 4
 
     # Parameters for filtering the generated task string

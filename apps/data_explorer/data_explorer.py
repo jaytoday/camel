@@ -1,13 +1,27 @@
+# =========== Copyright 2023 @ CAMEL-AI.org. All Rights Reserved. ===========
+# Licensed under the Apache License, Version 2.0 (the “License”);
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an “AS IS” BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# =========== Copyright 2023 @ CAMEL-AI.org. All Rights Reserved. ===========
 """
 Gradio-based web UI to explore the Camel dataset.
 """
 
 import argparse
 import random
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import gradio as gr
-from loader import Datasets, load_datasets
+
+from apps.data_explorer.loader import Datasets, load_datasets
 
 
 def parse_arguments():
@@ -21,6 +35,9 @@ def parse_arguments():
                         help='Default dataset name selected from ZIPs')
     parser.add_argument('--share', type=bool, default=False,
                         help='Expose the web UI to Gradio')
+    parser.add_argument(
+        '--server-name', type=str, default="0.0.0.0",
+        help='localhost for local, 0.0.0.0 (default) for public')
     parser.add_argument('--server-port', type=int, default=8080,
                         help='Port ot run the web page on')
     parser.add_argument('--inbrowser', type=bool, default=False,
@@ -35,10 +52,12 @@ def parse_arguments():
     return args
 
 
-def construct_app(datasets: Datasets, default_dataset: str = None):
+def construct_ui(blocks, datasets: Datasets,
+                 default_dataset: Optional[str] = None):
     """ Build Gradio UI and populate with chat data from JSONs.
 
     Args:
+        blocks: Gradio blocks
         datasets (Datasets): Several parsed
         multi-JSON dataset with chats.
         default_dataset (str): Default selection of the dataset.
@@ -208,7 +227,7 @@ def construct_app(datasets: Datasets, default_dataset: str = None):
         Returns:
             List[Tuple]: Chat history in chatbot UI element format.
         """
-        history = []
+        history: List[Tuple] = []
         curr_qa = (None, None)
         for k in sorted(messages.keys()):
             msg = messages[k]
@@ -285,25 +304,46 @@ def construct_app(datasets: Datasets, default_dataset: str = None):
                    [dataset_dd, assistant_dd, user_dd, task_dd],
                    [specified_task_ta, chatbot])
 
-    demo.load(set_default_dataset, None, dataset_dd)
+    blocks.load(set_default_dataset, None, dataset_dd)
 
 
-if __name__ == "__main__":
-    """ Entry point. """
+def construct_blocks(data_path: str, default_dataset: Optional[str]):
+    """ Construct Blocs app but do not launch it.
 
-    args = parse_arguments()
+    Args:
+        data_path (str): Path to the set of ZIP datasets.
+        default_dataset (Optional[str]): Name of the default dataset,
+            without extension.
+
+    Returns:
+        gr.Blocks: Blocks instance.
+    """
 
     print("Loading the dataset...")
-    datasets = load_datasets(args.data_path)
+    datasets = load_datasets(data_path)
     print("Dataset is loaded")
 
     print("Getting Data Explorer web server online...")
 
-    with gr.Blocks() as demo:
-        construct_app(datasets, args.default_dataset)
+    with gr.Blocks() as blocks:
+        construct_ui(blocks, datasets, default_dataset)
 
-    demo.queue(args.concurrency_count)
-    demo.launch(share=args.share, inbrowser=args.inbrowser,
-                server_name="0.0.0.0", server_port=args.server_port)
+    return blocks
+
+
+def main():
+    """ Entry point. """
+
+    args = parse_arguments()
+
+    blocks = construct_blocks(args.data_path, args.default_dataset)
+
+    blocks.queue(args.concurrency_count) \
+          .launch(share=args.share, inbrowser=args.inbrowser,
+                  server_name=args.server_name, server_port=args.server_port)
 
     print("Exiting.")
+
+
+if __name__ == "__main__":
+    main()
